@@ -6,7 +6,7 @@
   <title>Focus Hub – Your Favourite Hub on the Internet</title>
   <!-- Google Fonts (ampersand escaped for XML/ Blogger safety) -->
   <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;500;600;700&amp;display=swap" rel="stylesheet">
-  <!-- External libraries (cdnjs, face-api, jsPDF) -->
+  <!-- External libraries -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.15.0/dist/tf-core.min.js"></script>
@@ -139,9 +139,24 @@
       border-radius: 24px;
       overflow: hidden;
       border: 2px solid #3a3a3a;
+      padding: 12px;
     }
-    video#webcam { width: 100%; transform: scaleX(-1); background: #000; display: block; }
-    .status-badge { background: #222; padding: 6px 12px; border-radius: 28px; font-size: 0.7rem; color: #eee; text-align: center; margin-top: 6px; }
+    video#webcam { width: 100%; transform: scaleX(-1); background: #000; display: none; border-radius: 16px; }
+    .cam-control {
+      display: flex;
+      justify-content: center;
+      margin-top: 8px;
+    }
+    #enableCamBtn {
+      background: #2c2c2c;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 40px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .status-badge { background: #222; padding: 6px 12px; border-radius: 28px; font-size: 0.7rem; color: #eee; text-align: center; margin-top: 8px; }
     .stats-side {
       flex: 1;
       background: #dadada;
@@ -256,7 +271,11 @@
     </div>
   </div>
   <div class="camera-stats-row">
-    <div class="camera-box"><video id="webcam" autoplay playsinline muted></video><div class="status-badge" id="camStatus">📷 loading models...</div></div>
+    <div class="camera-box">
+      <video id="webcam" autoplay playsinline muted></video>
+      <div class="cam-control"><button id="enableCamBtn">📷 Enable Camera</button></div>
+      <div class="status-badge" id="camStatus">📷 Click "Enable Camera" to start</div>
+    </div>
     <div class="stats-side">
       <p>😴 Sleepy today: <strong id="sleepyCountToday">0</strong></p><p>😃 Smile today: <strong id="smileCountToday">0</strong></p>
       <p>⚠️ Distractions (session): <strong id="distractionSession">0</strong>/5</p><p>⏸️ Pauses today: <strong id="pauseCountToday">0</strong> | ⏱️ Pause total: <strong id="pauseDurationToday">0s</strong></p>
@@ -274,35 +293,30 @@
   let focusActive = false, focusPaused = false;
   let timerSeconds = 25 * 60;
   let timerInterval = null;
-  let currentDistractionLevel = 0;       // 0..5, 5 = session terminated
-  let gracePeriodTimer = null;            // 30s timeout handle
+  let currentDistractionLevel = 0;
+  let gracePeriodTimer = null;
   let isInGracePeriod = false;
-  let offTaskStartTime = null;             // timestamp (ms) when off-task period began
-  
+  let offTaskStartTime = null;
   let pauseStartTime = null;
   let pauseCountToday = 0;
-  
   let sessionIdleStart = null;
-  
-  // minimization tracking
   let wasMinimized = false;
   let minimizeStartTime = null;
   let minimizeFailTimeout = null;
-  
-  // Face & cooldowns
   let lastSleepEvent = 0, lastSmileEvent = 0;
   let faceCurrentlyDetected = false;
-  
-  // Daily stats: contains events array
   let dailyStats = {};
-  
-  // DOM
+  let cameraStream = null;
+  let faceDetectionStarted = false;
+
   const video = document.getElementById('webcam');
   const canvasEyes = document.getElementById('scanningEyes');
   const ctx = canvasEyes.getContext('2d');
   const warningDiv = document.getElementById('warningMessage');
-  
-  // Helper: IST formatted datetime (full string)
+  const enableCamBtn = document.getElementById('enableCamBtn');
+  const camStatus = document.getElementById('camStatus');
+
+  // Helper: IST formatted datetime
   function getISTDateTime() {
     const now = new Date();
     const offsetMs = 5.5 * 60 * 60 * 1000;
@@ -317,32 +331,27 @@
     return ist.toISOString().split('T')[0];
   }
   function getISTTimestampMs() { return Date.now() + (5.5*3600000); }
-  
+
   // Load/Save stats
   function loadStats() {
     const stored = localStorage.getItem('focusHubStats');
     if(stored) try { dailyStats = JSON.parse(stored); } catch(e){ dailyStats = {}; }
     if(!dailyStats) dailyStats = {};
-    // cleanup older than 30 days
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
     const cutoffStr = cutoff.toISOString().split('T')[0];
     for(let d in dailyStats) if(d < cutoffStr) delete dailyStats[d];
     saveStats();
   }
   function saveStats() { localStorage.setItem('focusHubStats', JSON.stringify(dailyStats)); }
-  
-  // Add an event entry to today's log
+
   function addEventToToday(type, level, startIST, endIST, description) {
     const today = getISTDateStr();
     if(!dailyStats[today]) dailyStats[today] = { sleepy:0, smile:0, pauseCount:0, pauseDurationSec:0, idleSec:0, focusMinutes:0, events: [] };
     if(!dailyStats[today].events) dailyStats[today].events = [];
-    dailyStats[today].events.push({
-      type, level, startIST, endIST, description,
-      timestampMs: getISTTimestampMs()
-    });
+    dailyStats[today].events.push({ type, level, startIST, endIST, description, timestampMs: getISTTimestampMs() });
     saveStats();
   }
-  
+
   function updateTodayStat(field, increment = 1, absolute = null) {
     const today = getISTDateStr();
     if(!dailyStats[today]) dailyStats[today] = { sleepy:0, smile:0, pauseCount:0, pauseDurationSec:0, idleSec:0, focusMinutes:0, events: [] };
@@ -351,7 +360,7 @@
     saveStats();
     refreshUI();
   }
-  
+
   function refreshUI() {
     const today = getISTDateStr();
     const s = dailyStats[today] || { sleepy:0, smile:0, pauseCount:0, pauseDurationSec:0, idleSec:0 };
@@ -362,26 +371,23 @@
     document.getElementById('pauseDurationToday').innerText = `${Math.floor(secs/60)}m ${secs%60}s`;
     document.getElementById('idleTimeToday').innerText = `${Math.floor((s.idleSec||0)/60)}m ${(s.idleSec||0)%60}s`;
   }
-  
+
   function addPauseEvent(durationSec) {
     if(durationSec <= 0) return;
     updateTodayStat('pauseCount', 1);
     updateTodayStat('pauseDurationSec', durationSec);
-    const endIST = getISTDateTime();
-    addEventToToday('pause', 0, null, endIST, `Paused for ${durationSec}s`);
+    addEventToToday('pause', 0, null, getISTDateTime(), `Paused for ${durationSec}s`);
   }
-  
+
   function addIdleEvent(durationSec) {
     if(durationSec <= 0) return;
     updateTodayStat('idleSec', durationSec);
-    const endIST = getISTDateTime();
-    addEventToToday('idle_face', 0, null, endIST, `Face lost for ${durationSec}s`);
+    addEventToToday('idle_face', 0, null, getISTDateTime(), `Face lost for ${durationSec}s`);
   }
-  
+
   function addSleepy() { if(Date.now() - lastSleepEvent > 3500) { lastSleepEvent = Date.now(); updateTodayStat('sleepy', 1); } }
   function addSmile() { if(Date.now() - lastSmileEvent > 3000) { lastSmileEvent = Date.now(); updateTodayStat('smile', 1); } }
-  
-  // background color management
+
   function updateBodyBackground() {
     if(!focusActive || focusPaused) {
       document.body.classList.remove('focused-bg','distract-level-1','distract-level-2','distract-level-3','distract-level-4','distract-level-5','idle-bg','minimized-bg');
@@ -398,8 +404,7 @@
     else if(currentDistractionLevel === 4) document.body.classList.add('distract-level-4');
     else if(currentDistractionLevel >= 5) document.body.classList.add('distract-level-5');
   }
-  
-  // Start 30-second grace period when off-task begins
+
   function startGracePeriod() {
     if(gracePeriodTimer) {
       if(gracePeriodTimer._interval) clearInterval(gracePeriodTimer._interval);
@@ -449,7 +454,7 @@
     gracePeriodTimer = setTimeout(() => {}, 30000);
     gracePeriodTimer._interval = interval;
   }
-  
+
   function cancelGracePeriod() {
     if(gracePeriodTimer) {
       if(gracePeriodTimer._interval) clearInterval(gracePeriodTimer._interval);
@@ -461,7 +466,7 @@
       warningDiv.innerText = '⚡ Focus status: Active';
     else if(!faceCurrentlyDetected) warningDiv.innerText = '😶 Face not detected';
   }
-  
+
   function setOffTask(offTaskActive) {
     if(!focusActive || focusPaused) return;
     if(offTaskActive && !isInGracePeriod && currentDistractionLevel < 5) {
@@ -474,7 +479,7 @@
       setTimeout(() => { if(!isInGracePeriod) warningDiv.innerText = '⚡ Focus status: Active'; }, 1500);
     }
   }
-  
+
   function terminateSession(reason) {
     if(!focusActive) return;
     focusActive = false;
@@ -495,7 +500,7 @@
     alert(reason);
     resetFocusUI();
   }
-  
+
   function resetFocusUI() {
     focusActive = false;
     focusPaused = false;
@@ -510,7 +515,7 @@
     offTaskStartTime = null;
     updateBodyBackground();
   }
-  
+
   function updateTimerDisplay() {
     let mins = Math.floor(timerSeconds / 60);
     let secs = timerSeconds % 60;
@@ -526,7 +531,7 @@
       resetFocusUI();
     }
   }
-  
+
   function startFocus() {
     if(focusActive) return;
     let minutes = 25;
@@ -554,7 +559,7 @@
     updateBodyBackground();
     addEventToToday('session_start', 0, getISTDateTime(), null, `Focus started: ${minutes} min`);
   }
-  
+
   function pauseFocus() {
     if(!focusActive || focusPaused) return;
     focusPaused = true;
@@ -564,7 +569,7 @@
     document.getElementById('pauseBtn').disabled = true;
     updateBodyBackground();
   }
-  
+
   function resumeFocus() {
     if(!focusActive || !focusPaused) return;
     if(pauseStartTime) {
@@ -579,25 +584,39 @@
     else if(faceCurrentlyDetected && !wasMinimized) setOffTask(false);
     updateBodyBackground();
   }
-  
-  // Face detection
+
+  // Face detection logic (starts only after camera is enabled)
   async function initFaceAPI() {
     await faceapi.nets.tinyFaceDetector.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights');
     await faceapi.nets.faceLandmark68Net.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights');
     await faceapi.nets.faceExpressionNet.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights');
-    document.getElementById('camStatus').innerText = '✅ model ready';
-    startCamera();
+    camStatus.innerText = '✅ Model ready. Click "Enable Camera" to start.';
   }
-  
+
   async function startCamera() {
+    if(cameraStream) {
+      // already running
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      cameraStream = stream;
       video.srcObject = stream;
+      video.style.display = 'block';
       video.play();
-      detectLoop();
-    } catch(e) { document.getElementById('camStatus').innerText = '⚠️ camera denied'; }
+      camStatus.innerText = '✅ Camera active. Tracking face...';
+      enableCamBtn.style.display = 'none';
+      if (!faceDetectionStarted) {
+        faceDetectionStarted = true;
+        detectLoop();
+      }
+    } catch(e) {
+      console.error('Camera error:', e);
+      camStatus.innerText = '⚠️ Camera access denied or unavailable. Please allow camera permissions.';
+      enableCamBtn.style.display = 'block';
+    }
   }
-  
+
   function getEyeAspectRatio(eyePoints) {
     const p2=eyePoints[1], p6=eyePoints[5], p3=eyePoints[2], p5=eyePoints[4];
     const v1=Math.hypot(p2.x-p6.x,p2.y-p6.y), v2=Math.hypot(p3.x-p5.x,p3.y-p5.y);
@@ -605,36 +624,43 @@
     const h=Math.hypot(p1.x-p4.x,p1.y-p4.y);
     return (v1+v2)/(2*h);
   }
-  
+
   async function detectLoop() {
-    if(!video.videoWidth) { requestAnimationFrame(detectLoop); return; }
-    const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceExpressions();
-    const nowFace = !!detection;
-    if(nowFace !== faceCurrentlyDetected && focusActive && !focusPaused) {
-      if(nowFace) setOffTask(false);
-      else setOffTask(true);
+    if(!video.videoWidth || video.paused || video.ended) {
+      requestAnimationFrame(detectLoop);
+      return;
     }
-    faceCurrentlyDetected = nowFace;
-    if(detection && focusActive && !focusPaused && !wasMinimized) {
-      const landmarks = detection.landmarks;
-      const leftEye=landmarks.getLeftEye(), rightEye=landmarks.getRightEye();
-      const ear = (getEyeAspectRatio(leftEye)+getEyeAspectRatio(rightEye))/2;
-      if(ear<0.2) addSleepy();
-      const expr = detection.expressions;
-      if(expr.happy>0.75) addSmile();
-      const nose=landmarks.getNose(), jaw=landmarks.getJawOutline();
-      if(jaw.length && nose.length) {
-        let noseX=nose[0].x, leftJaw=jaw[0].x, rightJaw=jaw[jaw.length-1].x;
-        let faceWidth=rightJaw-leftJaw;
-        let relNose=(noseX-leftJaw)/faceWidth;
-        let yaw=Math.abs(relNose-0.5)*2;
-        if(yaw>0.45 && !isInGracePeriod && currentDistractionLevel<5) setOffTask(true);
-        else if(yaw<=0.45 && isInGracePeriod && faceCurrentlyDetected) setOffTask(false);
+    try {
+      const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceExpressions();
+      const nowFace = !!detection;
+      if(nowFace !== faceCurrentlyDetected && focusActive && !focusPaused) {
+        if(nowFace) setOffTask(false);
+        else setOffTask(true);
       }
+      faceCurrentlyDetected = nowFace;
+      if(detection && focusActive && !focusPaused && !wasMinimized) {
+        const landmarks = detection.landmarks;
+        const leftEye=landmarks.getLeftEye(), rightEye=landmarks.getRightEye();
+        const ear = (getEyeAspectRatio(leftEye)+getEyeAspectRatio(rightEye))/2;
+        if(ear<0.2) addSleepy();
+        const expr = detection.expressions;
+        if(expr.happy>0.75) addSmile();
+        const nose=landmarks.getNose(), jaw=landmarks.getJawOutline();
+        if(jaw.length && nose.length) {
+          let noseX=nose[0].x, leftJaw=jaw[0].x, rightJaw=jaw[jaw.length-1].x;
+          let faceWidth=rightJaw-leftJaw;
+          let relNose=(noseX-leftJaw)/faceWidth;
+          let yaw=Math.abs(relNose-0.5)*2;
+          if(yaw>0.45 && !isInGracePeriod && currentDistractionLevel<5) setOffTask(true);
+          else if(yaw<=0.45 && isInGracePeriod && faceCurrentlyDetected) setOffTask(false);
+        }
+      }
+    } catch(e) {
+      // Silently ignore detection errors
     }
     requestAnimationFrame(detectLoop);
   }
-  
+
   // Visibility API (minimization)
   document.addEventListener('visibilitychange', () => {
     if(!focusActive || focusPaused) return;
@@ -660,8 +686,8 @@
       updateBodyBackground();
     }
   });
-  
-  // Stats modal with color-coded events
+
+  // Stats modal
   function renderStatsModal() {
     const container = document.getElementById('statsLogContainer');
     const allDates = Object.keys(dailyStats).sort().reverse();
@@ -693,7 +719,7 @@
     }
     container.innerHTML = html;
   }
-  
+
   async function exportStatsPDF() {
     const modalContent = document.querySelector('#statsModal .modal-content');
     const originalOverflow = modalContent.style.overflow;
@@ -710,14 +736,16 @@
     } catch(err) { alert("PDF error: " + err); }
     modalContent.style.overflow = originalOverflow;
   }
-  
-  // Bindings
+
+  // Event listeners
+  enableCamBtn.addEventListener('click', startCamera);
   document.getElementById('startBtn').onclick = startFocus;
   document.getElementById('pauseBtn').onclick = pauseFocus;
   document.getElementById('resumeBtn').onclick = resumeFocus;
   document.getElementById('myStatsBtn').onclick = () => { renderStatsModal(); document.getElementById('statsModal').classList.add('active'); };
   document.getElementById('closeStatsBack').onclick = () => document.getElementById('statsModal').classList.remove('active');
   document.getElementById('exportStatsPDF').onclick = exportStatsPDF;
+
   document.querySelectorAll('.duration-btn').forEach(btn => {
     btn.onclick = () => {
       document.querySelectorAll('.duration-btn').forEach(b=>b.classList.remove('active'));
@@ -726,7 +754,7 @@
     };
   });
   document.getElementById('customMinutes').addEventListener('change', (e) => { if(!focusActive && e.target.value>0) timerSeconds=parseInt(e.target.value)*60; updateTimerDisplay(); });
-  
+
   // Eye animation (two eyes, pingpong, blink)
   let eyeX=120, eyeDir=2.2, blink=false, blinkFrames=0;
   function drawEyes() {
@@ -751,10 +779,10 @@
     ctx.beginPath(); ctx.arc(eyeX+44+Math.sin(Date.now()/500+2)*3, eyeY-2+Math.cos(Date.now()/700+1)*1.5, 13, 0, Math.PI*2); ctx.fill();
     requestAnimationFrame(drawEyes);
   }
-  
+
   loadStats();
   refreshUI();
-  initFaceAPI();
+  initFaceAPI();  // preload models, but camera starts only on button click
   drawEyes();
   updateTimerDisplay();
 </script>
