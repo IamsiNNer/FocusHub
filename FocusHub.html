@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Focus Hub – Your Favourite Hub on the Internet</title>
+  <!-- Google Fonts (ampersand escaped for XML/ Blogger safety) -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;500;600;700&amp;display=swap" rel="stylesheet">
+  <!-- External libraries (cdnjs, face-api, jsPDF) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@4.15.0/dist/tf-core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@4.15.0/dist/tf-converter.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+    body {
+      background: #2c2c2c;
+      font-family: 'Inter', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 24px;
+      transition: background-color 0.3s ease;
+    }
+    /* Background states */
+    body.focused-bg { background-color: #1e7a3a; }
+    body.distract-level-1 { background-color: #ffd966; }
+    body.distract-level-2 { background-color: #ffb347; }
+    body.distract-level-3 { background-color: #ff7e47; }
+    body.distract-level-4 { background-color: #e63946; }
+    body.distract-level-5 { background-color: #b91c1c; }
+    body.idle-bg { background-color: #5a626e; }
+    body.minimized-bg { background-color: #4a4e69; }
+
+    .app-container {
+      max-width: 880px;
+      width: 100%;
+      background: #e8e8e8;
+      border-radius: 36px;
+      padding: 24px 28px 32px;
+      box-shadow: 0 20px 35px rgba(0,0,0,0.3);
+    }
+    .eyes-canvas-wrapper {
+      background: #111;
+      border-radius: 28px;
+      padding: 8px;
+      margin-bottom: 20px;
+      box-shadow: inset 0 0 0 2px #3a3a3a;
+    }
+    canvas#scanningEyes {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #0a0f12;
+      border-radius: 24px;
+    }
+    .warning-area {
+      background: #2c2c2c;
+      color: white;
+      padding: 8px 12px;
+      border-radius: 40px;
+      text-align: center;
+      font-size: 0.8rem;
+      margin-bottom: 12px;
+      font-weight: bold;
+    }
+    .timer-panel {
+      background: #f5f5f5;
+      border-radius: 28px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+    }
+    .focus-header {
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .subject-area, .duration-select {
+      background: white;
+      padding: 6px 16px;
+      border-radius: 60px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    #subjectInput {
+      border: none;
+      background: transparent;
+      font-weight: 500;
+      padding: 8px 0;
+      outline: none;
+    }
+    .duration-btn {
+      background: #ddd;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 40px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .duration-btn.active { background: #2c2c2c; color: white; }
+    #customMinutes { width: 70px; text-align: center; border: 1px solid #aaa; border-radius: 40px; }
+    .timer-display {
+      font-size: 4rem;
+      font-weight: 800;
+      font-family: monospace;
+      text-align: center;
+      background: #000;
+      padding: 12px;
+      border-radius: 48px;
+      color: #f0f0f0;
+      margin: 12px 0;
+    }
+    .timer-controls { display: flex; justify-content: center; gap: 14px; margin-top: 12px; }
+    .ctrl-btn {
+      background: #2c2c2c;
+      border: none;
+      padding: 10px 24px;
+      border-radius: 60px;
+      font-weight: 700;
+      color: white;
+      cursor: pointer;
+    }
+    .ctrl-btn.outline { background: transparent; border: 2px solid #2c2c2c; color: #2c2c2c; }
+    .ctrl-btn:disabled { opacity: 0.5; pointer-events: none; }
+    .camera-stats-row {
+      display: flex;
+      gap: 20px;
+      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+    .camera-box {
+      flex: 1;
+      background: #111;
+      border-radius: 24px;
+      overflow: hidden;
+      border: 2px solid #3a3a3a;
+    }
+    video#webcam { width: 100%; transform: scaleX(-1); background: #000; display: block; }
+    .status-badge { background: #222; padding: 6px 12px; border-radius: 28px; font-size: 0.7rem; color: #eee; text-align: center; margin-top: 6px; }
+    .stats-side {
+      flex: 1;
+      background: #dadada;
+      border-radius: 24px;
+      padding: 12px 16px;
+    }
+    .stats-side p { font-size: 0.8rem; font-weight: 600; margin: 8px 0; display: flex; justify-content: space-between; }
+    .stats-btn-footer { margin-top: 28px; text-align: left; }
+    #myStatsBtn {
+      background: #1f1f1f;
+      border: none;
+      font-weight: 700;
+      padding: 12px 28px;
+      border-radius: 60px;
+      color: white;
+      cursor: pointer;
+      display: inline-flex;
+      gap: 8px;
+    }
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(6px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      visibility: hidden;
+      opacity: 0;
+      transition: 0.2s;
+    }
+    .modal.active { visibility: visible; opacity: 1; }
+    .modal-content {
+      background: #e8e8e8;
+      width: 95%;
+      max-width: 800px;
+      max-height: 85vh;
+      border-radius: 32px;
+      padding: 20px;
+      overflow-y: auto;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      gap: 10px;
+      border-bottom: 2px solid #000;
+      padding-bottom: 12px;
+    }
+    .back-btn, .export-pdf-btn {
+      background: #222;
+      border: none;
+      color: white;
+      font-weight: bold;
+      padding: 8px 18px;
+      border-radius: 40px;
+      cursor: pointer;
+    }
+    .export-pdf-btn { background: #0b5e2e; }
+    .event-log-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+    .event-row {
+      padding: 10px 14px;
+      border-radius: 16px;
+      font-size: 0.75rem;
+      font-family: monospace;
+      border-left: 6px solid;
+      background: #fefefe;
+    }
+    .event-success { background: #d4edda; border-left-color: #28a745; }
+    .event-level-1 { background: #fff3cd; border-left-color: #ffc107; }
+    .event-level-2 { background: #ffe0b3; border-left-color: #fd7e14; }
+    .event-level-3 { background: #ffd699; border-left-color: #e67e22; }
+    .event-level-4 { background: #ffb347; border-left-color: #e63946; }
+    .event-level-5 { background: #f8d7da; border-left-color: #b91c1c; }
+    .event-minimized { background: #e2e3e5; border-left-color: #6c757d; }
+    hr { margin: 12px 0; }
+    .footer-note {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 0.8rem;
+      color: #3c3c3c;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+<div class="app-container">
+  <div class="eyes-canvas-wrapper">
+    <canvas id="scanningEyes" width="600" height="160"></canvas>
+  </div>
+  <div id="warningMessage" class="warning-area">⚡ Focus status: Active</div>
+  <div class="timer-panel">
+    <div class="focus-header">
+      <div class="subject-area"><label>📘 Subject:</label><input type="text" id="subjectInput" value="Deep Work"></div>
+      <div class="duration-select">
+        <button data-min="5" class="duration-btn">5min</button><button data-min="15" class="duration-btn">15min</button>
+        <button data-min="25" class="duration-btn active">25min</button><button data-min="45" class="duration-btn">45min</button>
+        <input type="number" id="customMinutes" placeholder="custom" min="1" max="180">
+      </div>
+    </div>
+    <div class="timer-display" id="timerDisplay">25:00</div>
+    <div class="timer-controls">
+      <button id="startBtn" class="ctrl-btn">▶ START</button>
+      <button id="pauseBtn" class="ctrl-btn outline" disabled>⏸ Pause</button>
+      <button id="resumeBtn" class="ctrl-btn outline" disabled>▶ Resume</button>
+    </div>
+  </div>
+  <div class="camera-stats-row">
+    <div class="camera-box"><video id="webcam" autoplay playsinline muted></video><div class="status-badge" id="camStatus">📷 loading models...</div></div>
+    <div class="stats-side">
+      <p>😴 Sleepy today: <strong id="sleepyCountToday">0</strong></p><p>😃 Smile today: <strong id="smileCountToday">0</strong></p>
+      <p>⚠️ Distractions (session): <strong id="distractionSession">0</strong>/5</p><p>⏸️ Pauses today: <strong id="pauseCountToday">0</strong> | ⏱️ Pause total: <strong id="pauseDurationToday">0s</strong></p>
+      <p>🕒 Idle/Face lost: <strong id="idleTimeToday">0s</strong></p>
+    </div>
+  </div>
+  <div class="stats-btn-footer"><button id="myStatsBtn">📊 MY STATS</button></div>
+  <div class="footer-note">Made with ❤️ by Dr.</div>
+</div>
+
+<div id="statsModal" class="modal"><div class="modal-content"><div class="modal-header"><h2>📋 Detailed Activity Log (30 days)</h2><div><button id="exportStatsPDF" class="export-pdf-btn">📎 Export PDF</button><button id="closeStatsBack" class="back-btn">← BACK</button></div></div><div id="statsLogContainer" class="event-log-list">Loading...</div></div></div>
+
+<script>
+  // ------------------- GLOBALS -------------------
+  let focusActive = false, focusPaused = false;
+  let timerSeconds = 25 * 60;
+  let timerInterval = null;
+  let currentDistractionLevel = 0;       // 0..5, 5 = session terminated
+  let gracePeriodTimer = null;            // 30s timeout handle
+  let isInGracePeriod = false;
+  let offTaskStartTime = null;             // timestamp (ms) when off-task period began
+  
+  let pauseStartTime = null;
+  let pauseCountToday = 0;
+  
+  let sessionIdleStart = null;
+  
+  // minimization tracking
+  let wasMinimized = false;
+  let minimizeStartTime = null;
+  let minimizeFailTimeout = null;
+  
+  // Face & cooldowns
+  let lastSleepEvent = 0, lastSmileEvent = 0;
+  let faceCurrentlyDetected = false;
+  
+  // Daily stats: contains events array
+  let dailyStats = {};
+  
+  // DOM
+  const video = document.getElementById('webcam');
+  const canvasEyes = document.getElementById('scanningEyes');
+  const ctx = canvasEyes.getContext('2d');
+  const warningDiv = document.getElementById('warningMessage');
+  
+  // Helper: IST formatted datetime (full string)
+  function getISTDateTime() {
+    const now = new Date();
+    const offsetMs = 5.5 * 60 * 60 * 1000;
+    const ist = new Date(now.getTime() + offsetMs);
+    const pad = n => n.toString().padStart(2,'0');
+    return `${pad(ist.getHours())}:${pad(ist.getMinutes())}:${pad(ist.getSeconds())} on ${pad(ist.getDate())}/${pad(ist.getMonth()+1)}/${ist.getFullYear()}`;
+  }
+  function getISTDateStr() {
+    const now = new Date();
+    const offsetMs = 5.5 * 60 * 60 * 1000;
+    const ist = new Date(now.getTime() + offsetMs);
+    return ist.toISOString().split('T')[0];
+  }
+  function getISTTimestampMs() { return Date.now() + (5.5*3600000); }
+  
+  // Load/Save stats
+  function loadStats() {
+    const stored = localStorage.getItem('focusHubStats');
+    if(stored) try { dailyStats = JSON.parse(stored); } catch(e){ dailyStats = {}; }
+    if(!dailyStats) dailyStats = {};
+    // cleanup older than 30 days
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
+    const cutoffStr = cutoff.toISOString().split('T')[0];
+    for(let d in dailyStats) if(d < cutoffStr) delete dailyStats[d];
+    saveStats();
+  }
+  function saveStats() { localStorage.setItem('focusHubStats', JSON.stringify(dailyStats)); }
+  
+  // Add an event entry to today's log
+  function addEventToToday(type, level, startIST, endIST, description) {
+    const today = getISTDateStr();
+    if(!dailyStats[today]) dailyStats[today] = { sleepy:0, smile:0, pauseCount:0, pauseDurationSec:0, idleSec:0, focusMinutes:0, events: [] };
+    if(!dailyStats[today].events) dailyStats[today].events = [];
+    dailyStats[today].events.push({
+      type, level, startIST, endIST, description,
+      timestampMs: getISTTimestampMs()
+    });
+    saveStats();
+  }
+  
+  function updateTodayStat(field, increment = 1, absolute = null) {
+    const today = getISTDateStr();
+    if(!dailyStats[today]) dailyStats[today] = { sleepy:0, smile:0, pauseCount:0, pauseDurationSec:0, idleSec:0, focusMinutes:0, events: [] };
+    if(absolute !== null) dailyStats[today][field] = absolute;
+    else dailyStats[today][field] = (dailyStats[today][field] || 0) + increment;
+    saveStats();
+    refreshUI();
+  }
+  
+  function refreshUI() {
+    const today = getISTDateStr();
+    const s = dailyStats[today] || { sleepy:0, smile:0, pauseCount:0, pauseDurationSec:0, idleSec:0 };
+    document.getElementById('sleepyCountToday').innerText = s.sleepy;
+    document.getElementById('smileCountToday').innerText = s.smile;
+    document.getElementById('pauseCountToday').innerText = s.pauseCount;
+    const secs = s.pauseDurationSec || 0;
+    document.getElementById('pauseDurationToday').innerText = `${Math.floor(secs/60)}m ${secs%60}s`;
+    document.getElementById('idleTimeToday').innerText = `${Math.floor((s.idleSec||0)/60)}m ${(s.idleSec||0)%60}s`;
+  }
+  
+  function addPauseEvent(durationSec) {
+    if(durationSec <= 0) return;
+    updateTodayStat('pauseCount', 1);
+    updateTodayStat('pauseDurationSec', durationSec);
+    const endIST = getISTDateTime();
+    addEventToToday('pause', 0, null, endIST, `Paused for ${durationSec}s`);
+  }
+  
+  function addIdleEvent(durationSec) {
+    if(durationSec <= 0) return;
+    updateTodayStat('idleSec', durationSec);
+    const endIST = getISTDateTime();
+    addEventToToday('idle_face', 0, null, endIST, `Face lost for ${durationSec}s`);
+  }
+  
+  function addSleepy() { if(Date.now() - lastSleepEvent > 3500) { lastSleepEvent = Date.now(); updateTodayStat('sleepy', 1); } }
+  function addSmile() { if(Date.now() - lastSmileEvent > 3000) { lastSmileEvent = Date.now(); updateTodayStat('smile', 1); } }
+  
+  // background color management
+  function updateBodyBackground() {
+    if(!focusActive || focusPaused) {
+      document.body.classList.remove('focused-bg','distract-level-1','distract-level-2','distract-level-3','distract-level-4','distract-level-5','idle-bg','minimized-bg');
+      document.body.style.backgroundColor = '#2c2c2c';
+      return;
+    }
+    if(wasMinimized) { document.body.classList.add('minimized-bg'); return; }
+    if(!faceCurrentlyDetected && !wasMinimized) { document.body.classList.add('idle-bg'); return; }
+    document.body.classList.remove('idle-bg','minimized-bg');
+    if(currentDistractionLevel === 0) document.body.classList.add('focused-bg');
+    else if(currentDistractionLevel === 1) document.body.classList.add('distract-level-1');
+    else if(currentDistractionLevel === 2) document.body.classList.add('distract-level-2');
+    else if(currentDistractionLevel === 3) document.body.classList.add('distract-level-3');
+    else if(currentDistractionLevel === 4) document.body.classList.add('distract-level-4');
+    else if(currentDistractionLevel >= 5) document.body.classList.add('distract-level-5');
+  }
+  
+  // Start 30-second grace period when off-task begins
+  function startGracePeriod() {
+    if(gracePeriodTimer) {
+      if(gracePeriodTimer._interval) clearInterval(gracePeriodTimer._interval);
+      clearTimeout(gracePeriodTimer);
+    }
+    if(!focusActive || focusPaused) return;
+    if(currentDistractionLevel >= 5) return;
+    isInGracePeriod = true;
+    let secondsLeft = 30;
+    warningDiv.innerText = `⚠️ WARNING: Focus lost! Recover within ${secondsLeft}s to avoid distraction count.`;
+    const interval = setInterval(() => {
+      if(!isInGracePeriod || !focusActive || focusPaused || currentDistractionLevel >= 5) {
+        clearInterval(interval);
+        return;
+      }
+      secondsLeft--;
+      warningDiv.innerText = `⚠️ WARNING: Focus lost! Recover within ${secondsLeft}s to avoid distraction count.`;
+      if(secondsLeft <= 0) {
+        clearInterval(interval);
+        if(isInGracePeriod && focusActive && !focusPaused && currentDistractionLevel < 5) {
+          currentDistractionLevel++;
+          document.getElementById('distractionSession').innerText = currentDistractionLevel;
+          updateTodayStat('distractionAdded', 1);
+          if(offTaskStartTime) {
+            const startIST = new Date(offTaskStartTime).toLocaleString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' });
+            const endIST = getISTDateTime();
+            addEventToToday('distraction', currentDistractionLevel, startIST, endIST, `Distraction level ${currentDistractionLevel} (30s grace expired)`);
+            offTaskStartTime = null;
+          }
+          updateBodyBackground();
+          if(currentDistractionLevel === 5) {
+            terminateSession('5 distractions reached. Session failed.');
+          } else {
+            if(!faceCurrentlyDetected || wasMinimized) {
+              offTaskStartTime = Date.now();
+              startGracePeriod();
+            } else {
+              isInGracePeriod = false;
+              warningDiv.innerText = '✅ Focus regained!';
+              setTimeout(() => { if(!isInGracePeriod) warningDiv.innerText = '⚡ Focus status: Active'; }, 1500);
+            }
+          }
+        }
+        isInGracePeriod = false;
+      }
+    }, 1000);
+    gracePeriodTimer = setTimeout(() => {}, 30000);
+    gracePeriodTimer._interval = interval;
+  }
+  
+  function cancelGracePeriod() {
+    if(gracePeriodTimer) {
+      if(gracePeriodTimer._interval) clearInterval(gracePeriodTimer._interval);
+      clearTimeout(gracePeriodTimer);
+      gracePeriodTimer = null;
+    }
+    isInGracePeriod = false;
+    if(focusActive && !focusPaused && currentDistractionLevel < 5 && faceCurrentlyDetected && !wasMinimized)
+      warningDiv.innerText = '⚡ Focus status: Active';
+    else if(!faceCurrentlyDetected) warningDiv.innerText = '😶 Face not detected';
+  }
+  
+  function setOffTask(offTaskActive) {
+    if(!focusActive || focusPaused) return;
+    if(offTaskActive && !isInGracePeriod && currentDistractionLevel < 5) {
+      if(!offTaskStartTime) offTaskStartTime = Date.now();
+      startGracePeriod();
+    } else if(!offTaskActive && isInGracePeriod) {
+      cancelGracePeriod();
+      offTaskStartTime = null;
+      warningDiv.innerText = '✅ Focus regained!';
+      setTimeout(() => { if(!isInGracePeriod) warningDiv.innerText = '⚡ Focus status: Active'; }, 1500);
+    }
+  }
+  
+  function terminateSession(reason) {
+    if(!focusActive) return;
+    focusActive = false;
+    if(timerInterval) clearInterval(timerInterval);
+    timerInterval = null;
+    focusPaused = false;
+    cancelGracePeriod();
+    if(sessionIdleStart) { let idleSec = Math.floor((Date.now() - sessionIdleStart)/1000); if(idleSec>0) addIdleEvent(idleSec); sessionIdleStart=null; }
+    if(minimizeStartTime) { 
+      let minSec = Math.floor((Date.now() - minimizeStartTime)/1000);
+      if(minSec>0) addEventToToday('minimize', 0, null, getISTDateTime(), `Browser minimized for ${Math.floor(minSec/60)}m ${minSec%60}s`);
+      minimizeStartTime=null;
+    }
+    wasMinimized=false;
+    document.getElementById('pauseBtn').disabled = true;
+    document.getElementById('resumeBtn').disabled = true;
+    document.getElementById('startBtn').disabled = false;
+    alert(reason);
+    resetFocusUI();
+  }
+  
+  function resetFocusUI() {
+    focusActive = false;
+    focusPaused = false;
+    currentDistractionLevel = 0;
+    document.getElementById('distractionSession').innerText = "0";
+    document.getElementById('pauseBtn').disabled = true;
+    document.getElementById('resumeBtn').disabled = true;
+    document.getElementById('startBtn').disabled = false;
+    if(timerInterval) clearInterval(timerInterval);
+    timerInterval = null;
+    cancelGracePeriod();
+    offTaskStartTime = null;
+    updateBodyBackground();
+  }
+  
+  function updateTimerDisplay() {
+    let mins = Math.floor(timerSeconds / 60);
+    let secs = timerSeconds % 60;
+    document.getElementById('timerDisplay').innerText = `${mins.toString().padStart(2,'0')}:${secs.toString().padStart(2,'0')}`;
+    if(timerSeconds <= 0 && focusActive) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+      focusActive = false;
+      let completedMins = Math.floor((25*60 - timerSeconds)/60);
+      updateTodayStat('focusMinutes', completedMins);
+      addEventToToday('session_success', 0, getISTDateTime(), getISTDateTime(), `Focus completed: ${completedMins} min`);
+      alert("🎉 Focus session completed! Great job.");
+      resetFocusUI();
+    }
+  }
+  
+  function startFocus() {
+    if(focusActive) return;
+    let minutes = 25;
+    const activeDur = document.querySelector('.duration-btn.active');
+    if(activeDur && activeDur.dataset.min) minutes = parseInt(activeDur.dataset.min);
+    const custom = document.getElementById('customMinutes').value;
+    if(custom && parseInt(custom)>0) minutes = parseInt(custom);
+    timerSeconds = minutes * 60;
+    updateTimerDisplay();
+    focusActive = true;
+    focusPaused = false;
+    currentDistractionLevel = 0;
+    wasMinimized = false;
+    document.getElementById('distractionSession').innerText = "0";
+    if(timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+      if(focusActive && !focusPaused && !wasMinimized && faceCurrentlyDetected && currentDistractionLevel < 5 && timerSeconds > 0) {
+        timerSeconds--;
+        updateTimerDisplay();
+      }
+    }, 1000);
+    document.getElementById('pauseBtn').disabled = false;
+    document.getElementById('resumeBtn').disabled = true;
+    document.getElementById('startBtn').disabled = true;
+    updateBodyBackground();
+    addEventToToday('session_start', 0, getISTDateTime(), null, `Focus started: ${minutes} min`);
+  }
+  
+  function pauseFocus() {
+    if(!focusActive || focusPaused) return;
+    focusPaused = true;
+    pauseStartTime = Date.now();
+    cancelGracePeriod();
+    document.getElementById('resumeBtn').disabled = false;
+    document.getElementById('pauseBtn').disabled = true;
+    updateBodyBackground();
+  }
+  
+  function resumeFocus() {
+    if(!focusActive || !focusPaused) return;
+    if(pauseStartTime) {
+      let pausedSec = Math.floor((Date.now() - pauseStartTime)/1000);
+      if(pausedSec>0) addPauseEvent(pausedSec);
+      pauseStartTime = null;
+    }
+    focusPaused = false;
+    document.getElementById('resumeBtn').disabled = true;
+    document.getElementById('pauseBtn').disabled = false;
+    if(!faceCurrentlyDetected && !wasMinimized) setOffTask(true);
+    else if(faceCurrentlyDetected && !wasMinimized) setOffTask(false);
+    updateBodyBackground();
+  }
+  
+  // Face detection
+  async function initFaceAPI() {
+    await faceapi.nets.tinyFaceDetector.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights');
+    await faceapi.nets.faceLandmark68Net.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights');
+    await faceapi.nets.faceExpressionNet.loadFromUri('https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights');
+    document.getElementById('camStatus').innerText = '✅ model ready';
+    startCamera();
+  }
+  
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = stream;
+      video.play();
+      detectLoop();
+    } catch(e) { document.getElementById('camStatus').innerText = '⚠️ camera denied'; }
+  }
+  
+  function getEyeAspectRatio(eyePoints) {
+    const p2=eyePoints[1], p6=eyePoints[5], p3=eyePoints[2], p5=eyePoints[4];
+    const v1=Math.hypot(p2.x-p6.x,p2.y-p6.y), v2=Math.hypot(p3.x-p5.x,p3.y-p5.y);
+    const p1=eyePoints[0], p4=eyePoints[3];
+    const h=Math.hypot(p1.x-p4.x,p1.y-p4.y);
+    return (v1+v2)/(2*h);
+  }
+  
+  async function detectLoop() {
+    if(!video.videoWidth) { requestAnimationFrame(detectLoop); return; }
+    const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceExpressions();
+    const nowFace = !!detection;
+    if(nowFace !== faceCurrentlyDetected && focusActive && !focusPaused) {
+      if(nowFace) setOffTask(false);
+      else setOffTask(true);
+    }
+    faceCurrentlyDetected = nowFace;
+    if(detection && focusActive && !focusPaused && !wasMinimized) {
+      const landmarks = detection.landmarks;
+      const leftEye=landmarks.getLeftEye(), rightEye=landmarks.getRightEye();
+      const ear = (getEyeAspectRatio(leftEye)+getEyeAspectRatio(rightEye))/2;
+      if(ear<0.2) addSleepy();
+      const expr = detection.expressions;
+      if(expr.happy>0.75) addSmile();
+      const nose=landmarks.getNose(), jaw=landmarks.getJawOutline();
+      if(jaw.length && nose.length) {
+        let noseX=nose[0].x, leftJaw=jaw[0].x, rightJaw=jaw[jaw.length-1].x;
+        let faceWidth=rightJaw-leftJaw;
+        let relNose=(noseX-leftJaw)/faceWidth;
+        let yaw=Math.abs(relNose-0.5)*2;
+        if(yaw>0.45 && !isInGracePeriod && currentDistractionLevel<5) setOffTask(true);
+        else if(yaw<=0.45 && isInGracePeriod && faceCurrentlyDetected) setOffTask(false);
+      }
+    }
+    requestAnimationFrame(detectLoop);
+  }
+  
+  // Visibility API (minimization)
+  document.addEventListener('visibilitychange', () => {
+    if(!focusActive || focusPaused) return;
+    if(document.hidden) {
+      wasMinimized = true;
+      minimizeStartTime = Date.now();
+      setOffTask(true);
+      updateBodyBackground();
+      minimizeFailTimeout = setTimeout(() => {
+        if(wasMinimized && focusActive && (Date.now() - minimizeStartTime) >= 10*60*1000) {
+          terminateSession('Browser minimized for more than 10 minutes. Session failed.');
+        }
+      }, 10*60*1000);
+    } else {
+      if(wasMinimized && minimizeStartTime) {
+        let minSec = Math.floor((Date.now() - minimizeStartTime)/1000);
+        addEventToToday('minimize', 0, new Date(minimizeStartTime).toLocaleString('en-IN',{hour12:false,timeZone:'Asia/Kolkata'}), getISTDateTime(), `Minimized for ${Math.floor(minSec/60)}m ${minSec%60}s`);
+        minimizeStartTime=null;
+        if(minimizeFailTimeout) clearTimeout(minimizeFailTimeout);
+      }
+      wasMinimized = false;
+      setOffTask(false);
+      updateBodyBackground();
+    }
+  });
+  
+  // Stats modal with color-coded events
+  function renderStatsModal() {
+    const container = document.getElementById('statsLogContainer');
+    const allDates = Object.keys(dailyStats).sort().reverse();
+    if(allDates.length === 0) { container.innerHTML = '<div>No logs yet.</div>'; return; }
+    let html = '';
+    for(let date of allDates.slice(0,30)) {
+      const data = dailyStats[date];
+      html += `<h3 style="margin-top:16px;">📅 ${date}</h3>`;
+      if(data.events && data.events.length) {
+        data.events.sort((a,b)=>a.timestampMs - b.timestampMs);
+        data.events.forEach((ev, idx) => {
+          let rowClass = 'event-row ';
+          if(ev.type === 'session_success') rowClass += 'event-success';
+          else if(ev.type === 'distraction') {
+            if(ev.level === 1) rowClass += 'event-level-1';
+            else if(ev.level === 2) rowClass += 'event-level-2';
+            else if(ev.level === 3) rowClass += 'event-level-3';
+            else if(ev.level === 4) rowClass += 'event-level-4';
+            else rowClass += 'event-level-5';
+          } else if(ev.type === 'minimize') rowClass += 'event-minimized';
+          else rowClass += 'event-minimized';
+          html += `<div class="${rowClass}">
+            <strong>#${idx+1}</strong> [${ev.type.toUpperCase()}] ${ev.description}<br>
+            <small>📅 ${ev.startIST ? `from ${ev.startIST}` : ''} ${ev.endIST ? `to ${ev.endIST}` : ''}</small>
+          </div>`;
+        });
+      } else { html += `<div>No events this day</div>`; }
+      html += `<hr>`;
+    }
+    container.innerHTML = html;
+  }
+  
+  async function exportStatsPDF() {
+    const modalContent = document.querySelector('#statsModal .modal-content');
+    const originalOverflow = modalContent.style.overflow;
+    modalContent.style.overflow = 'visible';
+    try {
+      const canvas = await html2canvas(modalContent, { scale: 2, backgroundColor: '#e8e8e8' });
+      const { jsPDF } = window.jspdf;
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const imgWidth = 190;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 10, 10, imgWidth, imgHeight);
+      pdf.save(`focus_hub_report_${getISTDateStr()}.pdf`);
+    } catch(err) { alert("PDF error: " + err); }
+    modalContent.style.overflow = originalOverflow;
+  }
+  
+  // Bindings
+  document.getElementById('startBtn').onclick = startFocus;
+  document.getElementById('pauseBtn').onclick = pauseFocus;
+  document.getElementById('resumeBtn').onclick = resumeFocus;
+  document.getElementById('myStatsBtn').onclick = () => { renderStatsModal(); document.getElementById('statsModal').classList.add('active'); };
+  document.getElementById('closeStatsBack').onclick = () => document.getElementById('statsModal').classList.remove('active');
+  document.getElementById('exportStatsPDF').onclick = exportStatsPDF;
+  document.querySelectorAll('.duration-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.duration-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      if(!focusActive) { let mins=parseInt(btn.dataset.min); timerSeconds=mins*60; updateTimerDisplay(); }
+    };
+  });
+  document.getElementById('customMinutes').addEventListener('change', (e) => { if(!focusActive && e.target.value>0) timerSeconds=parseInt(e.target.value)*60; updateTimerDisplay(); });
+  
+  // Eye animation (two eyes, pingpong, blink)
+  let eyeX=120, eyeDir=2.2, blink=false, blinkFrames=0;
+  function drawEyes() {
+    const w=canvasEyes.width, h=canvasEyes.height;
+    ctx.clearRect(0,0,w,h);
+    ctx.fillStyle="#0a1117";
+    ctx.fillRect(0,0,w,h);
+    eyeX+=eyeDir;
+    if(eyeX>w-140) { eyeX=w-140; eyeDir=-Math.abs(eyeDir); }
+    if(eyeX<100) { eyeX=100; eyeDir=Math.abs(eyeDir); }
+    if(blinkFrames<=0 && Math.random()<0.009) { blink=true; blinkFrames=7; }
+    if(blinkFrames>0) blinkFrames--;
+    else blink=false;
+    const eyeY=h/2-8, eyeW=44, eyeH=blink?12:44;
+    ctx.fillStyle="#FEFEFE";
+    ctx.beginPath(); ctx.ellipse(eyeX-48, eyeY, eyeW, eyeH, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle="#1F2A2E";
+    ctx.beginPath(); ctx.arc(eyeX-52+Math.sin(Date.now()/500)*3, eyeY-2+Math.cos(Date.now()/700)*1.5, 13, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle="#FEFEFE";
+    ctx.beginPath(); ctx.ellipse(eyeX+48, eyeY, eyeW, eyeH, 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle="#1F2A2E";
+    ctx.beginPath(); ctx.arc(eyeX+44+Math.sin(Date.now()/500+2)*3, eyeY-2+Math.cos(Date.now()/700+1)*1.5, 13, 0, Math.PI*2); ctx.fill();
+    requestAnimationFrame(drawEyes);
+  }
+  
+  loadStats();
+  refreshUI();
+  initFaceAPI();
+  drawEyes();
+  updateTimerDisplay();
+</script>
+</body>
+</html>
